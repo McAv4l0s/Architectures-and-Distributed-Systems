@@ -18,7 +18,23 @@ Los productos representan límites funcionales, no infraestructura. Las capacida
 
 Flujo lógico:
 
-HCP y canales → Experience API → Orquestador de solicitudes → Veeva / Consent Service / contenido aprobado / revisión MLR / SFMC → eventos → plataforma de datos → BI y NLP.
+```mermaid
+flowchart LR
+    HCP["HCP / MSL"] --> CH["Canales"]
+    CH --> API["Experience API"]
+    API --> WF["Orquestador de solicitudes"]
+    WF --> CRM["Veeva CRM"]
+    WF --> CONS["Consent Service"]
+    WF --> CONTENT["Contenido aprobado"]
+    WF --> MLR["Revisión MLR"]
+    WF --> SFMC["SFMC"]
+    CRM --> BUS["Eventos"]
+    CONS --> BUS
+    SFMC --> BUS
+    BUS --> DATA["Plataforma de datos"]
+    DATA --> BI["BI / Reporting"]
+    DATA --> NLP["NLP"]
+```
 
 Decisiones:
 
@@ -45,6 +61,19 @@ Un blueprint completo incluye contexto, límites, ownership, trust boundaries, f
 ## 2. Architecture decision tree
 
 **Pregunta:** ¿cómo integrar una solicitud médica?
+
+```mermaid
+flowchart TD
+    A["¿Respuesta inmediata?"] -->|Sí| B["API síncrona"]
+    A -->|No| C["¿Hecho de negocio reutilizable?"]
+    C -->|Sí| D["Evento asíncrono"]
+    C -->|No| E["¿Sólo extracción periódica?"]
+    E -->|Sí| F["Batch incremental / CDC"]
+    E -->|No| G["Revisar necesidad"]
+    B --> H["Idempotency key"]
+    D --> I["Outbox + consumidor idempotente + DLQ"]
+    F --> J["Watermark + reconciliación"]
+```
 
 1. ¿El consumidor necesita respuesta inmediata?
    - Sí: API síncrona.
@@ -100,6 +129,28 @@ Una aprobación debe tener owner, alcance, condiciones, evidencia y fecha de exp
 
 Secuencia:
 
+```mermaid
+sequenceDiagram
+    participant Portal
+    participant API as Experience API
+    participant WF as Workflow
+    participant CONS as Consent Service
+    participant CRM as Veeva CRM
+    participant BUS as Event Broker
+    participant SFMC
+    participant DATA as Data Platform
+
+    Portal->>API: Crear solicitud
+    API->>WF: Comando + idempotency key
+    WF->>CONS: Verificar elegibilidad
+    WF->>CRM: Relacionar HCP e interacción
+    WF-->>API: requestId + estado
+    API-->>Portal: 202 Accepted
+    WF->>BUS: MedicalRequestCreated
+    BUS-->>SFMC: Activar journey elegible
+    BUS-->>DATA: Registrar hecho analítico
+```
+
 1. Portal envía POST /medical-information-requests con idempotency key.
 2. Experience API solicita al workflow crear el caso.
 3. Workflow verifica consentimiento y relaciona el HCP/interacción en Veeva.
@@ -126,7 +177,26 @@ Controles distribuidos:
 
 Estados:
 
-Received → IdentityValidated → ConsentChecked → Triage → ContentSelected → MLRReview → ReadyToSend → Sent → Delivered → Closed.
+```mermaid
+stateDiagram-v2
+    [*] --> Received
+    Received --> IdentityValidated
+    IdentityValidated --> ConsentChecked
+    ConsentChecked --> Triage: permitido
+    ConsentChecked --> Blocked: no permitido
+    Triage --> ContentSelected
+    ContentSelected --> MLRReview
+    MLRReview --> ReadyToSend: aprobado
+    MLRReview --> Rework: cambios
+    Rework --> MLRReview
+    ReadyToSend --> Sent
+    Sent --> Delivered
+    Sent --> DeliveryFailed
+    DeliveryFailed --> ReadyToSend: retry permitido
+    Delivered --> Closed
+    Blocked --> Closed
+    Closed --> [*]
+```
 
 Ramas: ConsentChecked puede pasar a Blocked; MLRReview a Rework; Sent a DeliveryFailed; un retry permitido vuelve a ReadyToSend.
 
@@ -173,7 +243,24 @@ Modelo:
 | Policy version | v3 |
 | Evidence reference | registro firmado |
 
-Revocación: HCP → Consent Service guarda una nueva versión → publica ConsentWithdrawn → SFMC suprime futuros envíos → Veeva actualiza su vista → auditoría conserva evidencia.
+Revocación:
+
+```mermaid
+sequenceDiagram
+    participant HCP
+    participant CONS as Consent Service
+    participant BUS as Event Broker
+    participant SFMC
+    participant CRM as Veeva CRM
+    participant AUDIT as Auditoría
+
+    HCP->>CONS: Revocar canal
+    CONS->>CONS: Guardar nueva versión
+    CONS->>BUS: ConsentWithdrawn
+    BUS-->>SFMC: Suprimir futuros envíos
+    BUS-->>CRM: Actualizar vista operativa
+    BUS-->>AUDIT: Conservar evidencia
+```
 
 Decisiones:
 
@@ -187,7 +274,23 @@ Decisiones:
 
 ## 8. Data platform
 
-Capas: fuentes → ingesta por batch/eventos/CDC → raw inmutable → estandarización/calidad → productos curados → capa semántica → BI y NLP. Catálogo, lineage, políticas y calidad atraviesan todas las capas.
+Capas:
+
+```mermaid
+flowchart LR
+    SRC["Veeva / SFMC / Portal / Consent"] --> ING["Batch / Eventos / CDC"]
+    ING --> RAW["Raw inmutable"]
+    RAW --> STD["Estandarización y calidad"]
+    STD --> CUR["Productos curados"]
+    CUR --> SEM["Capa semántica"]
+    SEM --> BI["BI / Reporting"]
+    CUR --> NLP["NLP / Búsqueda"]
+    GOV["Catálogo / Lineage / Políticas"] --- RAW
+    GOV --- STD
+    GOV --- CUR
+```
+
+Catálogo, lineage, políticas y calidad atraviesan todas las capas.
 
 Producto HCP Engagement 360:
 
@@ -231,7 +334,22 @@ Cada KPI necesita fórmula, granularidad, zona horaria, owner, exclusiones, late
 
 Caso: clasificar consultas por tema y urgencia operativa, sugerir contenido aprobado y mejorar búsqueda. El modelo no diagnostica ni prescribe.
 
-Flujo: consulta → minimización de PII → clasificador → umbral de confianza → recuperación sólo de contenido vigente → resumen con citas → guardrails → revisión humana → borrador. Si la confianza es baja, pasa a triage humano.
+Flujo:
+
+```mermaid
+flowchart LR
+    Q["Consulta"] --> PII["Minimización de PII"]
+    PII --> CLS["Clasificador"]
+    CLS --> CONF{"¿Confianza suficiente?"}
+    CONF -->|No| HUMAN["Triage humano"]
+    CONF -->|Sí| RET["Contenido vigente y aprobado"]
+    RET --> SUM["Resumen con citas"]
+    SUM --> GUARD["Guardrails"]
+    GUARD --> REVIEW["Revisión humana"]
+    REVIEW --> DRAFT["Borrador"]
+```
+
+Si la confianza es baja, pasa a triage humano.
 
 Controles:
 
@@ -269,6 +387,24 @@ Veeva no debe convertirse en bus de integración ni master de todos los dominios
 Ejemplo: enviar respuesta o invitación sólo si propósito, consentimiento, frecuencia y contenido son válidos, con correlationId al caso original.
 
 Flujo:
+
+```mermaid
+sequenceDiagram
+    participant WF as Medical Workflow
+    participant CONS as Consent Service
+    participant SFMC
+    participant BUS as Event Broker
+    participant CRM as Veeva CRM
+    participant DATA as Data Platform
+
+    WF->>CONS: Check eligibility
+    CONS-->>WF: Eligible + decisionRef
+    WF->>SFMC: Trigger + contentVersion + correlationId
+    SFMC-->>WF: Accepted + sendId
+    SFMC->>BUS: Delivered / Bounced / Suppressed
+    BUS-->>CRM: Actualizar interacción
+    BUS-->>DATA: Actualizar engagement
+```
 
 1. Workflow solicita eligibility al Consent Service.
 2. Recibe Eligible + decisionRef.
