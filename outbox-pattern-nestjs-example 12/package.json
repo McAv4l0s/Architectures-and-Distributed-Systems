@@ -1,0 +1,26 @@
+{
+  "name": "outbox-pattern-nestjs-fintech",
+  "version": "1.0.0",
+  "description": "Ejemplo simple del Outbox Pattern con NestJS + RabbitMQ + PostgreSQL para Fintech",
+  "license": "MIT",
+  "scripts": {
+    "start": "ts-node src/main.ts",
+    "start:dev": "ts-node --transpile-only src/main.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "^10.4.0",
+    "@nestjs/core": "^10.4.0",
+    "@nestjs/platform-express": "^10.4.0",
+    "@nestjs/typeorm": "^10.0.2",
+    "typeorm": "^0.3.20",
+    "pg": "^8.13.0",
+    "amqplib": "^0.10.4",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.0"
+  }
+}
